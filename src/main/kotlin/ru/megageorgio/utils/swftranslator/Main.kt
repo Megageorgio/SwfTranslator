@@ -49,7 +49,9 @@ fun main(args: Array<String>) {
         val fontName by option(
             ArgType.String, shortName = "f", description = "Font to use by default if original is not supported"
         ).default("Arial")
-
+        val calculateHeight by option(
+            ArgType.Boolean, shortName = "c", description = "Calculate new height for text (works very bad)"
+        ).default(false)
         val output by option(ArgType.String, shortName = "o", description = "Output file (swf or json)")
 
         override fun execute() {
@@ -63,12 +65,12 @@ fun main(args: Array<String>) {
             when (extension) {
                 "json" -> {
                     val tags = loadFromJson(input)
-                    translate(tags, key, sourceLang, targetLang)
+                    translate(tags, key, sourceLang, targetLang, calculateHeight)
                     saveToJson(tags, outputPath)
                 }
                 "swf" -> {
                     val tags = parse(input)
-                    translate(tags, key, sourceLang, targetLang)
+                    translate(tags, key, sourceLang, targetLang, calculateHeight)
                     patch(input, tags, fontName, outputPath)
                 }
                 else -> {
@@ -126,8 +128,8 @@ fun parse(input: String): List<TagRecord> {
                     TagRecord(t.characterId, t.texts.mapIndexed { index, text ->
                         RowRecord(
                             originalText = text,
-                            height = heightList.getOrNull(index),
-                            letterSpacing = letterSpacingList.getOrNull(index),
+                            height = heightList.getOrNull(index)?.toInt(),
+                            letterSpacing = letterSpacingList.getOrNull(index)?.toInt(),
                             color = colorList.getOrNull(index)
                         )
                     })
@@ -139,7 +141,7 @@ fun parse(input: String): List<TagRecord> {
     return tags
 }
 
-fun translate(tags: List<TagRecord>, authKey: String, sourceLang: String?, targetLang: String) {
+fun translate(tags: List<TagRecord>, authKey: String, sourceLang: String?, targetLang: String, calculateHeight: Boolean) {
     val translator = Translator(authKey)
     for ((translatedTagsCount, tag) in tags.withIndex()) {
         if (translatedTagsCount % 10 == 0) {
@@ -149,6 +151,16 @@ fun translate(tags: List<TagRecord>, authKey: String, sourceLang: String?, targe
         for (row in tag.rows) {
             if (row.translatedText.isEmpty() && row.originalText.trim().isNotEmpty()) {
                 row.translatedText = translator.translateText(row.originalText, sourceLang, targetLang).text
+                if (calculateHeight) {
+                    val newHeight = row.height?.times(row.originalText.length.toFloat() / row.translatedText.length)
+                    if (newHeight != null && newHeight > 8) {
+                        row.height =  newHeight.toInt()
+                    }
+
+                    if (row.letterSpacing != null && row.letterSpacing!! < 0) {
+                        row.letterSpacing = 0
+                    }
+                }
             }
         }
     }
@@ -169,7 +181,7 @@ fun patch(input: String, tags: List<TagRecord>, fontName: String, output: String
             for (char in allChars) {
                 fontTag.addCharacter(char, font)
             }
-            swf.addTag(0, fontTag)
+            swf.addTag(4, fontTag)
             universalFontId = fontTag.characterId
         }
 
@@ -185,7 +197,6 @@ fun patch(input: String, tags: List<TagRecord>, fontName: String, output: String
                         formattedText = colorRegex.replaceFirst(formattedText, "color[RMV] ${row.color}")
                     }
                     formattedText = formattedText.replace("[RMV]", "")
-                    println(formattedText)
                     val isSuccess = t.setFormattedText(MissingCharacterHandler(),
                         formattedText,
                         newTag.rows.map { if (it.translatedText.isEmpty()) it.originalText else it.translatedText }
@@ -238,7 +249,7 @@ data class TagRecord(val id: Int, val rows: List<RowRecord>);
 data class RowRecord(
     val originalText: String,
     @EncodeDefault var translatedText: String = "",
-    val height: String?,
-    val letterSpacing: String?,
+    var height: Int?,
+    var letterSpacing: Int?,
     val color: String?
 )
